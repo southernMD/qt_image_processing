@@ -27,12 +27,56 @@
             /* 隐藏缓存Canvas */
         }
 
+        #mosaicCanvas {
+            position: absolute;
+            pointer-events: none; /* 允许点击穿透到下面的画布 */
+            z-index: 10;
+        }
+
         .canvas-container {
             width: 100%;
             height: 100%;
             display: flex;
             align-items: center;
             justify-content: center;
+            position: relative;
+        }
+        
+        /* 马赛克工具控制面板样式 */
+        .mosaic-controls {
+            position: fixed;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+            display: none;
+            z-index: 100;
+        }
+        
+        .mosaic-controls label {
+            margin-right: 10px;
+        }
+        
+        .mosaic-controls input {
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        
+        .mosaic-controls button {
+            margin-left: 10px;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            background: #2196F3;
+            color: white;
+            cursor: pointer;
+        }
+        
+        .mosaic-controls button:hover {
+            background: #0b7dda;
         }
     </style>
 </head>
@@ -41,6 +85,22 @@
     <div class="canvas-container">
         <canvas id="imageCanvas" width="600" height="400"></canvas>
         <canvas id="cacheCanvas" width="600" height="400"></canvas>
+        <canvas id="mosaicCanvas" width="600" height="400"></canvas>
+    </div>
+    
+    <!-- 马赛克工具控制面板 -->
+    <div class="mosaic-controls" id="mosaicControls">
+        <label for="brush-size">画笔大小: </label>
+        <input type="range" id="brush-size" min="5" max="50" value="20">
+        <span id="brush-size-value">20</span>
+        
+        <label for="pixel-size">马赛克像素: </label>
+        <input type="range" id="pixel-size" min="1" max="20" value="5">
+        <span id="pixel-size-value">5</span>
+        
+        <button id="clear-mosaic">清除马赛克</button>
+        <button id="apply-mosaic">应用</button>
+        <button id="exit-mosaic">退出</button>
     </div>
     <script>
         // 全局变量
@@ -53,6 +113,10 @@
 
         let hasImage = false;
         let originalImageData = null; // 存储原始图像数据
+
+        // 添加马赛克相关变量
+        let mosaicMode = false;
+        let mosaic = null;
 
         // 调整Canvas大小以适应窗口
         function resizeCanvas() {
@@ -391,6 +455,341 @@
             drawWelcomeText();
         },200);
 
+        // 马赛克类实现
+        class Mosaic {
+            constructor(brushSize) {
+                this.mosaicSize = brushSize || 20; // 画笔大小
+                this.canvas = document.getElementById("mosaicCanvas");
+                this.ctx = this.canvas.getContext("2d");
+                this.imgDataOriginal = null;
+                this.imgDataMosaic = null;
+                this.isMouseDown = false;
+                this.pixelSize = 5; // 马赛克块大小
+                this.isActive = false;
+                
+                // 绑定事件处理
+                this.handleMouseDown = this.handleMouseDown.bind(this);
+                this.handleMouseMove = this.handleMouseMove.bind(this);
+                this.handleMouseUp = this.handleMouseUp.bind(this);
+            }
+
+            init(sourceCanvas) {
+                // 获取源画布的位置和尺寸
+                const sourceRect = sourceCanvas.getBoundingClientRect();
+                const containerRect = document.querySelector('.canvas-container').getBoundingClientRect();
+                
+                // 设置马赛克画布的位置
+                this.canvas.style.left = (sourceRect.left - containerRect.left) + 'px';
+                this.canvas.style.top = (sourceRect.top - containerRect.top) + 'px';
+                this.canvas.width = sourceCanvas.width;
+                this.canvas.height = sourceCanvas.height;
+                
+                // 获取源画布的图像数据
+                const sourceCtx = sourceCanvas.getContext('2d');
+                const imageData = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+                this.imgDataOriginal = new Uint8ClampedArray(imageData.data);
+                
+                // 创建马赛克数据
+                this.imgDataMosaic = this.createMosaicData(this.canvas.width, this.canvas.height);
+                
+                // 清除马赛克画布
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+            activate() {
+                window.addEventListener("mousedown", this.handleMouseDown);
+                window.addEventListener("mousemove", this.handleMouseMove);
+                window.addEventListener("mouseup", this.handleMouseUp);
+                this.isActive = true;
+            }
+
+            deactivate() {
+                window.removeEventListener("mousedown", this.handleMouseDown);
+                window.removeEventListener("mousemove", this.handleMouseMove);
+                window.removeEventListener("mouseup", this.handleMouseUp);
+                this.isActive = false;
+            }
+
+            handleMouseDown(e) {
+                if (e.button !== 0) return; // 只处理左键点击
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // 检查点击是否在画布范围内
+                if (x >= 0 && x < this.canvas.width && y >= 0 && y < this.canvas.height) {
+                    this.isMouseDown = true;
+                    this.renderMosaic(x, y);
+                }
+            }
+
+            handleMouseMove(e) {
+                if (!this.isMouseDown) return;
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                this.renderMosaic(x, y);
+            }
+
+            handleMouseUp() {
+                this.isMouseDown = false;
+            }
+
+            resizeMosaicSize(size) {
+                this.mosaicSize = size;
+            }
+
+            setPixelSize(size) {
+                this.pixelSize = size;
+                if (this.imgDataOriginal) {
+                    this.imgDataMosaic = this.createMosaicData(this.canvas.width, this.canvas.height);
+                }
+            }
+
+            createMosaicData(width, height) {
+                // 创建一个临时数据存储马赛克效果
+                const tempData = new Uint8ClampedArray(this.imgDataOriginal.length);
+                
+                // 复制原始图像数据
+                for (let i = 0; i < this.imgDataOriginal.length; i++) {
+                    tempData[i] = this.imgDataOriginal[i];
+                }
+                
+                // 应用马赛克效果
+                for (let y = 0; y < height; y += this.pixelSize) {
+                    for (let x = 0; x < width; x += this.pixelSize) {
+                        const red = this.getAverageColor(x, y, "r", width);
+                        const green = this.getAverageColor(x, y, "g", width);
+                        const blue = this.getAverageColor(x, y, "b", width);
+                        this.fillMosaicBlock(x, y, red, green, blue, tempData, width);
+                    }
+                }
+                
+                return tempData;
+            }
+
+            getAverageColor(x, y, colorChannel, width) {
+                let r = 0, g = 0, b = 0;
+                let count = 0;
+                const height = this.canvas.height;
+
+                for (let row = y; row < y + this.pixelSize && row < height; row++) {
+                    for (let col = x; col < x + this.pixelSize && col < width; col++) {
+                        const index = (row * width + col) * 4;
+                        r += this.imgDataOriginal[index];
+                        g += this.imgDataOriginal[index + 1];
+                        b += this.imgDataOriginal[index + 2];
+                        count++;
+                    }
+                }
+
+                if (count === 0) return 0;
+                
+                r = Math.floor(r / count);
+                g = Math.floor(g / count);
+                b = Math.floor(b / count);
+
+                return colorChannel === "r" ? r : colorChannel === "g" ? g : b;
+            }
+
+            fillMosaicBlock(x, y, r, g, b, data, width) {
+                const height = this.canvas.height;
+                for (let row = y; row < y + this.pixelSize && row < height; row++) {
+                    for (let col = x; col < x + this.pixelSize && col < width; col++) {
+                        const index = (row * width + col) * 4;
+                        data[index] = r;
+                        data[index + 1] = g;
+                        data[index + 2] = b;
+                        data[index + 3] = 255;
+                    }
+                }
+            }
+
+            renderMosaic(x, y) {
+                const brushRadius = this.mosaicSize;
+                const width = this.canvas.width;
+                const height = this.canvas.height;
+                
+                // 获取当前马赛克Canvas的图像数据
+                const imageData = this.ctx.getImageData(0, 0, width, height);
+                const data = imageData.data;
+                
+                // 在鼠标周围应用马赛克效果
+                for (let py = Math.max(0, y - brushRadius); py < Math.min(height, y + brushRadius); py++) {
+                    for (let px = Math.max(0, x - brushRadius); px < Math.min(width, x + brushRadius); px++) {
+                        const distance = Math.sqrt(Math.pow(px - x, 2) + Math.pow(py - y, 2));
+                        
+                        if (distance <= brushRadius) {
+                            const blockX = Math.floor(px / this.pixelSize) * this.pixelSize;
+                            const blockY = Math.floor(py / this.pixelSize) * this.pixelSize;
+                            
+                            // 应用马赛克效果到当前像素块
+                            for (let by = blockY; by < blockY + this.pixelSize && by < height; by++) {
+                                for (let bx = blockX; bx < blockX + this.pixelSize && bx < width; bx++) {
+                                    const index = (by * width + bx) * 4;
+                                    const mosaicIndex = (blockY * width + blockX) * 4;
+                                    
+                                    data[index] = this.imgDataMosaic[mosaicIndex];
+                                    data[index + 1] = this.imgDataMosaic[mosaicIndex + 1];
+                                    data[index + 2] = this.imgDataMosaic[mosaicIndex + 2];
+                                    data[index + 3] = 255;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // 更新马赛克画布
+                this.ctx.putImageData(imageData, 0, 0);
+            }
+
+            clearMosaic() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+            
+            applyToMainCanvas() {
+                // 将马赛克效果应用到主画布
+                const mosaicData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+                const mainData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                
+                // 合并两个画布的数据
+                for (let i = 0; i < mosaicData.data.length; i += 4) {
+                    // 如果马赛克像素不透明，则使用马赛克数据
+                    if (mosaicData.data[i+3] > 0) {
+                        mainData.data[i] = mosaicData.data[i];
+                        mainData.data[i+1] = mosaicData.data[i+1];
+                        mainData.data[i+2] = mosaicData.data[i+2];
+                    }
+                }
+                
+                // 将结果应用到主画布
+                ctx.putImageData(mainData, 0, 0);
+                
+                // 复制到缓存画布
+                cacheCtx.putImageData(mainData, 0, 0);
+                
+                // 清除马赛克画布
+                this.clearMosaic();
+                
+                // 更新原始图像数据
+                originalImageData = canvas.toDataURL('image/png');
+                
+                return originalImageData;
+            }
+        }
+
+        // 初始化马赛克控件事件
+        function initMosaicControls() {
+            const brushSizeInput = document.getElementById('brush-size');
+            const brushSizeValue = document.getElementById('brush-size-value');
+            const pixelSizeInput = document.getElementById('pixel-size');
+            const pixelSizeValue = document.getElementById('pixel-size-value');
+            const clearButton = document.getElementById('clear-mosaic');
+            const applyButton = document.getElementById('apply-mosaic');
+            const exitButton = document.getElementById('exit-mosaic');
+            
+            // 更新画笔大小显示
+            brushSizeInput.addEventListener('input', function() {
+                const size = parseInt(brushSizeInput.value);
+                brushSizeValue.textContent = size;
+                if (mosaic) {
+                    mosaic.resizeMosaicSize(size);
+                }
+            });
+            
+            // 更新马赛克像素大小
+            pixelSizeInput.addEventListener('input', function() {
+                const size = parseInt(pixelSizeInput.value);
+                pixelSizeValue.textContent = size;
+                if (mosaic) {
+                    mosaic.setPixelSize(size);
+                }
+            });
+            
+            // 清除马赛克
+            clearButton.addEventListener('click', function() {
+                if (mosaic) {
+                    mosaic.clearMosaic();
+                }
+            });
+            
+            // 应用马赛克
+            applyButton.addEventListener('click', function() {
+                if (mosaic) {
+                    const result = mosaic.applyToMainCanvas();
+                    if (typeof window.onMosaicApplied === 'function') {
+                        window.onMosaicApplied(result);
+                    }
+                }
+            });
+            
+            // 退出马赛克模式
+            exitButton.addEventListener('click', function() {
+                exitMosaicMode();
+            });
+        }
+
+        // 窗口大小变化时重新对齐马赛克画布
+        window.addEventListener('resize', function() {
+            if (mosaicMode && mosaic) {
+                // 只调整位置，不修改数据
+                const sourceRect = canvas.getBoundingClientRect();
+                const containerRect = document.querySelector('.canvas-container').getBoundingClientRect();
+                const mosaicCanvas = document.getElementById('mosaicCanvas');
+                
+                mosaicCanvas.style.left = (sourceRect.left - containerRect.left) + 'px';
+                mosaicCanvas.style.top = (sourceRect.top - containerRect.top) + 'px';
+            }
+        });
+
+        // 进入马赛克模式
+        function enterMosaicMode() {
+            if (!hasImage) return false;
+            
+            mosaicMode = true;
+            
+            // 显示马赛克控制面板
+            document.getElementById('mosaicControls').style.display = 'block';
+            
+            // 初始化马赛克对象
+            if (!mosaic) {
+                mosaic = new Mosaic(parseInt(document.getElementById('brush-size').value));
+                mosaic.init(canvas); // 使用主画布初始化马赛克工具
+                mosaic.setPixelSize(parseInt(document.getElementById('pixel-size').value));
+            } else {
+                mosaic.init(canvas); // 重新初始化
+            }
+            
+            // 激活马赛克工具
+            mosaic.activate();
+            
+            return true;
+        }
+
+        // 退出马赛克模式
+        function exitMosaicMode() {
+            if (!mosaicMode) return false;
+            
+            mosaicMode = false;
+            
+            // 隐藏马赛克控制面板
+            document.getElementById('mosaicControls').style.display = 'none';
+            
+            // 禁用马赛克工具
+            if (mosaic) {
+                mosaic.deactivate();
+                mosaic.clearMosaic();
+            }
+            
+            return true;
+        }
+
+        // 初始化马赛克控件
+        initMosaicControls();
+
         // 暴露接口给Qt
         window.displayImage = drawImage;
         window.grayscaleImage = grayscale;
@@ -399,6 +798,13 @@
         window.meanFilter = meanFilter;
         window.gammaTransform = gammaTransform;
         window.edgeDetection = edgeDetection;
+        window.startMosaicMode = enterMosaicMode;
+        window.stopMosaicMode = exitMosaicMode;
+        window.onMosaicApplied = function(result) {
+            // 默认实现，Qt可以覆盖此函数
+            console.log("马赛克已应用");
+            return result;
+        };
     </script>
 </body>
 

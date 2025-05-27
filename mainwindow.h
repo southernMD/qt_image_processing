@@ -12,6 +12,13 @@
 #include "toolbar.h" // 引入新的工具栏类
 #include "imagelist.h"
 #include <QLabel>
+#include <QTcpServer>
+#include <QFile>
+#include <QMediaPlayer>
+#include <QVideoSink>
+#include <QVideoFrame>
+#include <QImage>
+
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -53,13 +60,20 @@ private slots:
     void saveImage();
 
     void showAboutDialog();
+    void onActionOpenVideoTriggered();
+    void onVideoFrameChanged(const QVideoFrame &frame);
+    // void applyEffectToAllFrames(const QString &effectName, const QVariant &params = QVariant());
+    // void saveProcessedFrames();
+    // void captureAllFrames(const QString &videoPath);
+    // void showFrameAtIndex(int index);
+
 private:
     Ui::MainWindow *ui;
     bool toolbarWasVisible;
     ToolBar *toolbar; // 使用新的工具栏类
     QAction *toggleToolbarAction;
     QPixmap currentPixmap;  // 当前显示的图片
-    
+
     // 使用WebView替代QLabel
     QWebEngineView *webView;
 
@@ -82,5 +96,18 @@ private:
     QSlider *edgeSlider = nullptr;
     QLabel *edgeLabel = nullptr;
     bool edgeVisible = false;
+
+    QMediaPlayer *mediaPlayer = nullptr;
+    QVideoSink *videoSink = nullptr;
+    QPushButton *returnButton = nullptr;
+    bool videoProcessingMode = false;
+
+    void setupVideoFrameProcessing();
+    void cleanupVideoMode();
+
+    QVector<QImage> capturedFrames;
+    bool isCapturingFrames = false;
+    int currentFrameIndex = 0;
+    QString currentVideoPath;
 };
 #endif // MAINWINDOW_H

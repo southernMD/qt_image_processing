@@ -20,12 +20,27 @@
 #include <QPushButton>
 #include <QMessageBox>
 #include <QSizePolicy>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QSharedPointer>
+#include <QRegularExpression>
+#include <QCoreApplication>
+#include <QMediaPlayer>
+#include <QVideoSink>
+#include <QVideoFrame>
+#include <QImage>
+#include <QPainter>
+#include <QElapsedTimer>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , toolbarWasVisible(true) // 默认工具栏可见
     , imageListWasVisible(true) // 默认图片列表可见
+    , mediaPlayer(nullptr)
+    , videoSink(nullptr)
+    , returnButton(nullptr)
+    , videoProcessingMode(false)
 {
     ui->setupUi(this);
     ui->actionOpen->setShortcut(QKeySequence("Ctrl+N"));
@@ -108,7 +123,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(toolbar->getDockWidget(), &QDockWidget::dockLocationChanged, toolbar, &ToolBar::adjustLayout);
     
     connect(ui->actionOpen, &QAction::triggered, this, &MainWindow::onActionOpenTriggered);
-    
+    connect(ui->actionVideo, &QAction::triggered, this, &MainWindow::onActionOpenVideoTriggered);
+
     // 立即应用布局，不使用定时器
     toolbar->adjustLayout(Qt::LeftDockWidgetArea);
     
@@ -116,12 +132,21 @@ MainWindow::MainWindow(QWidget *parent)
     if (ui->imageListWidget) {
         ui->imageListWidget->setVisible(false);
     }
-
-    
 }
 
 MainWindow::~MainWindow()
 {
+    cleanupVideoMode();
+    
+    // 删除多媒体相关资源
+    if (mediaPlayer) {
+        delete mediaPlayer;
+    }
+    
+    if (videoSink) {
+        delete videoSink;
+    }
+    
     delete ui;
     // toolbar 会作为子对象自动删除
 }
@@ -260,6 +285,7 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 
 // 成员变量添加
 QDockWidget *thresholdDock = nullptr; // 存储二值化DockWidget指针
+bool mosaicFlag = false;
 void MainWindow::handleToolbarButtonClicked(int index){
     qDebug() << "按钮点击" << index;
     
@@ -273,7 +299,10 @@ void MainWindow::handleToolbarButtonClicked(int index){
     if (index != 4 && edgeDock && edgeDock->isVisible()) {
         edgeDock->close();
     }
-    
+    if(index != 7){
+        mosaicFlag = false;
+        webView->page()->runJavaScript("stopMosaicMode()");
+    }
     switch (index) {
         case 0:
             webView->page()->runJavaScript("grayscale()", [this](const QVariant &result) {
@@ -310,25 +339,39 @@ void MainWindow::handleToolbarButtonClicked(int index){
             createEdgeDetectionSlider();
             break;
         case 5:
-            webView->page()->runJavaScript("resetImage()");
+            webView->page()->runJavaScript("resetImage()", [this](const QVariant &result) {
+                if (result.isValid() && !result.isNull()) {
+                    QString imageDataUrl = result.toString();
+                    if (!imageDataUrl.isEmpty()) {
+                        updateImageWithBase64(imageDataUrl);
+                    }
+                }
+            });
             break;
         case 6:
             saveImage();
             break;
         case 7:
             if (currentPixmap.isNull()) return;
-            webView->page()->runJavaScript("startMosaicMode()", [this](const QVariant &result) {
-                if (result.toBool()) {
-                    qDebug() << "已进入马赛克模式";
-                    
-                    webView->page()->runJavaScript(
-                        "window.onMosaicApplied = function(result) { return result; };",
-                        [this](const QVariant &) {
-                            qDebug() << "马赛克回调设置完成";
-                        }
-                    );
-                }
-            });
+            if(!mosaicFlag){
+                webView->page()->runJavaScript("startMosaicMode()", [this](const QVariant &result) {
+                    if (result.toBool()) {
+                        qDebug() << "已进入马赛克模式";
+
+                        webView->page()->runJavaScript(
+                            "window.onMosaicApplied = function(result) { return result; };",
+                            [this](const QVariant &) {
+                                qDebug() << "马赛克回调设置完成";
+                                mosaicFlag = true;
+                            }
+                            );
+                    }
+                });
+            }else{
+                mosaicFlag = false;
+                webView->page()->runJavaScript("stopMosaicMode()");
+            }
+
             break;
         default:
             break;
@@ -654,3 +697,152 @@ void MainWindow::showAboutDialog()
            "<p>一个功能齐全的图像处理工具</p>"
            "<p>© 2023 开发者姓名</p>"));
 }
+
+void MainWindow::onActionOpenVideoTriggered() {
+    // 打开文件对话框选择视频文件
+    QString videoPath = QFileDialog::getOpenFileName(
+        this,
+        tr("选择视频文件"),
+        QDir::homePath(),
+        tr("视频文件 (*.mp4 *.webm *.ogg *.mov *.avi)")
+    );
+    
+    if(videoPath.isEmpty()) return;
+    
+    // 先创建媒体播放器，但暂不播放
+    if (!mediaPlayer) {
+        mediaPlayer = new QMediaPlayer(this);
+    }
+    
+    // 创建视频接收器 (Qt 6特有)
+    if (!videoSink) {
+        videoSink = new QVideoSink(this);
+        connect(videoSink, &QVideoSink::videoFrameChanged, this, &MainWindow::onVideoFrameChanged);
+    }
+    
+    // 设置视频输出
+    mediaPlayer->setVideoSink(videoSink);
+    
+    // 设置视频源
+    mediaPlayer->setSource(QUrl::fromLocalFile(videoPath));
+    
+    // 在JavaScript函数初始化成功后，添加控制按钮并开始播放
+    QWidget *controlPanel = new QWidget(this);
+    QHBoxLayout *controlLayout = new QHBoxLayout(controlPanel);
+    
+    QPushButton *playButton = new QPushButton(tr("播放"), controlPanel);
+    QPushButton *pauseButton = new QPushButton(tr("暂停"), controlPanel);
+    QPushButton *stopButton = new QPushButton(tr("停止"), controlPanel);
+    
+    controlLayout->addWidget(playButton);
+    controlLayout->addWidget(pauseButton);
+    controlLayout->addWidget(stopButton);
+    
+    // 添加返回按钮
+    returnButton = new QPushButton(tr("返回图像编辑"), controlPanel);
+    controlLayout->addWidget(returnButton);
+    
+    controlPanel->setLayout(controlLayout);
+    
+    // 添加到布局
+    QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
+    if (layout) {
+        layout->addWidget(controlPanel);
+    }
+    
+    // 连接按钮信号
+    connect(playButton, &QPushButton::clicked, mediaPlayer, &QMediaPlayer::play);
+    connect(pauseButton, &QPushButton::clicked, mediaPlayer, &QMediaPlayer::pause);
+    connect(stopButton, &QPushButton::clicked, mediaPlayer, &QMediaPlayer::stop);
+    connect(returnButton, &QPushButton::clicked, this, &MainWindow::cleanupVideoMode);
+    
+    // 设置标志
+    videoProcessingMode = true;
+    
+    // 隐藏图像列表
+    if (imageList && imageList->isVisible()) {
+        imageList->setVisible(false);
+        toggleImageListAction->setChecked(false);
+    }
+    
+    // 开始播放
+    mediaPlayer->play();
+}
+
+void MainWindow::onVideoFrameChanged(const QVideoFrame &frame) {
+    if (!videoProcessingMode || !frame.isValid()) {
+        return;
+    }
+    
+    // 限制帧率，避免过多处理
+    static QElapsedTimer fpsTimer;
+    if (!fpsTimer.isValid() || fpsTimer.elapsed() > 100) { // 约10fps
+        fpsTimer.restart();
+        
+        // 将视频帧转换为图像
+        QImage image = frame.toImage();
+        if (image.isNull()) {
+            qDebug() << "无法转换视频帧为图像";
+            return;
+        }
+        
+        // 可选：调整大小以提高性能
+        if (image.width() > 800) {
+            image = image.scaledToWidth(800, Qt::SmoothTransformation);
+        }
+        
+        // 转换为Base64
+        QByteArray byteArray;
+        QBuffer buffer(&byteArray);
+        buffer.open(QIODevice::WriteOnly);
+        image.save(&buffer, "PNG", 80); // 质量80%
+        buffer.close();
+        
+        // 直接调用displayImage函数
+        QString base64Data = QString::fromLatin1(byteArray.toBase64().data());
+        QString imgData = "data:image/png;base64," + base64Data;
+        
+        webView->page()->runJavaScript(
+            QString("displayImage('%1')").arg(imgData)
+        );
+    }
+}
+
+void MainWindow::cleanupVideoMode() {
+    // 停止视频处理
+    videoProcessingMode = false;
+    
+    // 停止播放器
+    if (mediaPlayer) {
+        mediaPlayer->stop();
+    }
+    
+    // 移除控制面板
+    QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
+    if (layout) {
+        QLayoutItem *item = layout->takeAt(layout->count() - 1);
+        if (item) {
+            if (item->widget()) {
+                item->widget()->deleteLater();
+            }
+            delete item;
+        }
+    }
+    
+    // 重新初始化Canvas
+    initializeCanvas();
+    
+    // 恢复图像显示
+    if (!currentPixmap.isNull()) {
+        QTimer::singleShot(200, [this](){
+            displayImageInCanvas(currentPixmap);
+        });
+    }
+    
+    // 恢复图像列表
+    if (imageList) {
+        imageList->setVisible(true);
+        toggleImageListAction->setChecked(true);
+    }
+}
+

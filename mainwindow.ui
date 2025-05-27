@@ -91,12 +91,18 @@ QListWidget::item:selected {
      <string>文件(&amp;F)</string>
     </property>
     <addaction name="actionOpen"/>
+    <addaction name="actionVideo"/>
    </widget>
    <addaction name="menu"/>
   </widget>
   <action name="actionOpen">
    <property name="text">
     <string>添加图片</string>
+   </property>
+  </action>
+  <action name="actionVideo">
+   <property name="text">
+    <string>打开视频</string>
    </property>
   </action>
  </widget>
