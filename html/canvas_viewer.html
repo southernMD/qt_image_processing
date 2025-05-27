@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Canvas图片查看器</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            background-color: #f0f0f0;
+        }
+
+        #imageCanvas {
+            display: block;
+            margin: 0 auto;
+            background-color: white;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.2);
+        }
+
+        #cacheCanvas {
+            display: none;
+            /* 隐藏缓存Canvas */
+        }
+
+        .canvas-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="canvas-container">
+        <canvas id="imageCanvas" width="600" height="400"></canvas>
+        <canvas id="cacheCanvas" width="600" height="400"></canvas>
+    </div>
+    <script>
+        // 全局变量
+        let canvas = document.getElementById('imageCanvas');
+        let ctx = canvas.getContext('2d');
+
+        // 缓存Canvas
+        let cacheCanvas = document.getElementById('cacheCanvas');
+        let cacheCtx = cacheCanvas.getContext('2d');
+
+        let hasImage = false;
+        let originalImageData = null; // 存储原始图像数据
+
+        // 调整Canvas大小以适应窗口
+        function resizeCanvas() {
+            let container = document.querySelector('.canvas-container');
+
+            // 调整两个canvas的大小
+            canvas.width = container.clientWidth * 0.95;
+            canvas.height = container.clientHeight * 0.95;
+
+            cacheCanvas.width = canvas.width;
+            cacheCanvas.height = canvas.height;
+
+            // 如果有缓存的原始图像数据，恢复显示
+            // if (originalImageData) {
+            //     let img = new Image();
+            //     img.onload = function () {
+            //         drawImageToCanvas(img, ctx);
+            //         drawImageToCanvas(img, cacheCtx);
+            //     };
+            //     img.src = originalImageData;
+            // }
+        }
+
+        // 监听窗口大小变化
+        // window.addEventListener('resize', resizeCanvas);
+
+        // 初始调整大小
+        setTimeout(resizeCanvas, 100);
+
+        // 清空Canvas
+        function clearCanvas() {
+            console.log("clearCanvas");
+            // 清除显示Canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 清除缓存Canvas
+            cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+
+            // 重置原始图像数据
+            originalImageData = null;
+            hasImage = false;
+        }
+
+        // 辅助函数：将图像绘制到指定的Canvas上
+        function drawImageToCanvas(img, context) {
+            // 计算图片适应Canvas的最佳尺寸
+            let scale = Math.min(
+                canvas.width / img.width,
+                canvas.height / img.height
+            );
+            let x = (canvas.width - img.width * scale) / 2;
+            let y = (canvas.height - img.height * scale) / 2;
+            let width = img.width * scale;
+            let height = img.height * scale;
+
+            // 绘制图片
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            context.drawImage(img, x, y, width, height);
+        }
+
+        // 绘制图片到Canvas
+        function drawImage(imageData) {
+            if (!imageData) return;
+            console.log("drawImage");
+            let img = new Image();
+            img.onload = function () {
+                // 清空Canvas
+                clearCanvas();
+
+                // 绘制到显示Canvas
+                drawImageToCanvas(img, ctx);
+
+                // 绘制到缓存Canvas
+                drawImageToCanvas(img, cacheCtx);
+
+                // 保存原始图像数据
+                originalImageData = imageData;
+                hasImage = true;
+            };
+            img.src = imageData;
+        }
+
+        // 绘制欢迎文字
+        function drawWelcomeText() {
+            clearCanvas();
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#666';
+            ctx.fillText('选择图片以在此查看', canvas.width / 2, canvas.height / 2);
+            hasImage = false;
+        }
+
+        // 灰度化
+        function grayscale() {
+            if (!hasImage) return;
+
+            // 从缓存Canvas获取原始图像数据
+            let imageData = cacheCtx.getImageData(0, 0, cacheCanvas.width, cacheCanvas.height);
+            let data = imageData.data;
+
+            for (let i = 0; i < data.length; i += 4) {
+                let r = data[i];
+                let g = data[i + 1];
+                let b = data[i + 2];
+
+                let gray = Math.round((r + g + b) / 3);
+
+                data[i] = gray;
+                data[i + 1] = gray;
+                data[i + 2] = gray;
+            }
+
+            // 将处理后的图像数据显示在显示Canvas上
+            ctx.putImageData(imageData, 0, 0);
+            return canvas.toDataURL('image/png');
+        }
+
+        // 二值化
+        function binarize(threshold) {
+            console.log("二值化处理，阈值:", threshold);
+
+            if (!hasImage) return null;
+
+            // 从缓存Canvas获取原始图像数据
+            let imageData = cacheCtx.getImageData(0, 0, cacheCanvas.width, cacheCanvas.height);
+            let data = imageData.data;
+
+            // 对每个像素进行二值化处理
+            for (let i = 0; i < data.length; i += 4) {
+                // 计算灰度值 (R+G+B)/3
+                let r = data[i];
+                let g = data[i + 1];
+                let b = data[i + 2];
+                let gray = Math.round((r + g + b) / 3);
+
+                // 应用阈值，二值化处理
+                let binaryValue = gray > threshold ? 255 : 0;
+
+                // 设置RGB通道值
+                data[i] = binaryValue;     // R
+                data[i + 1] = binaryValue; // G
+                data[i + 2] = binaryValue; // B
+                // Alpha通道(i+3)保持不变
+            }
+
+            // 将处理后的数据绘制到显示Canvas上
+            ctx.putImageData(imageData, 0, 0);
+
+            // 返回处理后的图像数据
+            return canvas.toDataURL('image/png');
+        }
+
+        // 重置图像 - 将缓存的原始图像恢复到显示Canvas
+        function resetImage() {
+            if (!hasImage || !originalImageData) return;
+
+            let img = new Image();
+            img.onload = function () {
+                drawImageToCanvas(img, ctx);
+            };
+            img.src = originalImageData;
+            return originalImageData;
+        }
+
+        // 均值滤波3 x 3
+        function meanFilter() {
+            if (!hasImage) return null;
+
+            let imageData = cacheCtx.getImageData(0, 0, canvas.width, canvas.height);
+            let data = imageData.data;
+
+            let resultData = new Uint8ClampedArray(data);
+
+            const width = canvas.width;
+            const height = canvas.height;
+
+            for (let y = 1; y < height - 1; y++) {
+                for (let x = 1; x < width - 1; x++) {
+                    const pixelIndex = (y * width + x) * 4;
+                    let sumR = 0, sumG = 0, sumB = 0;
+                    for (let offsetY = -1; offsetY <= 1; offsetY++) {
+                        for (let offsetX = -1; offsetX <= 1; offsetX++) {
+                            const neighborIndex = ((y + offsetY) * width + (x + offsetX)) * 4;
+                            sumR += data[neighborIndex];
+                            sumG += data[neighborIndex + 1];
+                            sumB += data[neighborIndex + 2];
+                        }
+                    }
+
+                    resultData[pixelIndex] = Math.round(sumR / 9);
+                    resultData[pixelIndex + 1] = Math.round(sumG / 9);
+                    resultData[pixelIndex + 2] = Math.round(sumB / 9);
+                }
+            }
+
+            let resultImageData = new ImageData(resultData, width, height);
+
+            ctx.putImageData(resultImageData, 0, 0);
+
+            return canvas.toDataURL('image/png');
+        }
+
+        function gammaTransform(gamma) {
+            if (!hasImage) return null;
+
+            // 参数验证
+            gamma = Number(gamma);
+            if (isNaN(gamma) || gamma <= 0) {
+                console.error("伽马值必须大于0");
+                return null;
+            }
+
+            // 从缓存Canvas获取原始图像数据
+            let imageData = cacheCtx.getImageData(0, 0, cacheCanvas.width, cacheCanvas.height);
+            let data = imageData.data;
+
+            // 创建查找表以提高性能
+            const lookupTable = new Uint8Array(256);
+            for (let i = 0; i < 256; i++) {
+                lookupTable[i] = Math.min(255, Math.round(255 * Math.pow(i / 255, 1 / gamma)));
+            }
+
+            // 应用伽马变换
+            for (let i = 0; i < data.length; i += 4) {
+                // 对RGB三个通道应用变换
+                data[i] = lookupTable[data[i]];         // R
+                data[i + 1] = lookupTable[data[i + 1]]; // G
+                data[i + 2] = lookupTable[data[i + 2]]; // B
+                // Alpha通道(i+3)保持不变
+            }
+
+            // 将处理后的数据绘制到显示Canvas上
+            ctx.putImageData(imageData, 0, 0);
+
+            // 返回处理后的图像数据
+            return canvas.toDataURL('image/png');
+        }
+
+        // 边缘检测
+        function edgeDetection(threshold = 30) {
+            if (!hasImage) return null;
+
+            // 从缓存Canvas获取原始图像数据
+            let imageData = cacheCtx.getImageData(0, 0, cacheCanvas.width, cacheCanvas.height);
+            let srcData = imageData.data;
+            
+            // 创建一个新的ImageData对象用于存储结果
+            let resultImageData = ctx.createImageData(cacheCanvas.width, cacheCanvas.height);
+            let resultData = resultImageData.data;
+            
+            const width = cacheCanvas.width;
+            const height = cacheCanvas.height;
+            
+            // 首先转换为灰度图
+            let grayData = new Uint8Array(width * height);
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const index = (y * width + x) * 4;
+                    const r = srcData[index];
+                    const g = srcData[index + 1];
+                    const b = srcData[index + 2];
+                    
+                    // 转换为灰度
+                    grayData[y * width + x] = Math.round((r + g + b) / 3);
+                }
+            }
+            
+            // Sobel 卷积核
+            const sobelX = [
+                [-1, 0, 1],
+                [-2, 0, 2],
+                [-1, 0, 1]
+            ];
+            
+            const sobelY = [
+                [-1, -2, -1],
+                [0, 0, 0],
+                [1, 2, 1]
+            ];
+            
+            // 应用Sobel算子
+            for (let y = 1; y < height - 1; y++) {
+                for (let x = 1; x < width - 1; x++) {
+                    let gradientX = 0;
+                    let gradientY = 0;
+                    
+                    // 应用卷积核
+                    for (let ky = -1; ky <= 1; ky++) {
+                        for (let kx = -1; kx <= 1; kx++) {
+                            const grayIndex = (y + ky) * width + (x + kx);
+                            const kernelX = sobelX[ky + 1][kx + 1];
+                            const kernelY = sobelY[ky + 1][kx + 1];
+                            
+                            gradientX += grayData[grayIndex] * kernelX;
+                            gradientY += grayData[grayIndex] * kernelY;
+                        }
+                    }
+                    
+                    // 计算梯度幅值
+                    const magnitude = Math.sqrt(gradientX * gradientX + gradientY * gradientY);
+                    
+                    // 应用阈值获取边缘
+                    const resultIndex = (y * width + x) * 4;
+                    const edgeValue = magnitude > threshold ? 255 : 0;
+                    
+                    // 设置结果像素
+                    resultData[resultIndex] = edgeValue;     // R
+                    resultData[resultIndex + 1] = edgeValue; // G
+                    resultData[resultIndex + 2] = edgeValue; // B
+                    resultData[resultIndex + 3] = 255;       // A
+                }
+            }
+            
+            // 处理边界像素（设为黑色）
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    if (x === 0 || x === width - 1 || y === 0 || y === height - 1) {
+                        const index = (y * width + x) * 4;
+                        resultData[index] = 0;
+                        resultData[index + 1] = 0;
+                        resultData[index + 2] = 0;
+                        resultData[index + 3] = 255;
+                    }
+                }
+            }
+            
+            // 将处理后的数据绘制到显示Canvas上
+            ctx.putImageData(resultImageData, 0, 0);
+            
+            // 返回处理后的图像数据
+            return canvas.toDataURL('image/png');
+        }
+
+        setTimeout(()=>{
+            drawWelcomeText();
+        },200);
+
+        // 暴露接口给Qt
+        window.displayImage = drawImage;
+        window.grayscaleImage = grayscale;
+        window.binarizeImage = binarize;
+        window.resetImage = resetImage;
+        window.meanFilter = meanFilter;
+        window.gammaTransform = gammaTransform;
+        window.edgeDetection = edgeDetection;
+    </script>
+</body>
+
+</html>

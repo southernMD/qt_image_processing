@@ -7,6 +7,10 @@
 #include <QListWidgetItem>
 #include <QMenu>
 #include <QPixmap>
+#include <QWebEngineView>
+#include <QAction>
+#include "toolbar.h" // 引入新的工具栏类
+#include "imagelist.h"
 #include <QLabel>
 
 QT_BEGIN_NAMESPACE
@@ -21,11 +25,6 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
-private slots:
-    void onActionOpenTriggered();
-    void onImageItemClicked(QListWidgetItem *item);
-    void showImageListContextMenu(const QPoint &pos);
-
 protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
@@ -33,21 +32,55 @@ protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
+private slots:
+    void onActionOpenTriggered();
+    void initializeCanvas();
+    void handleToolbarButtonClicked(int index);
+    void onImageSelected(const QPixmap &pixmap, const QString &path);
+    void onImageDeleted(const QString &path);
+    void displayImageInCanvas(const QPixmap &pixmap);
+    void updateImageWithBase64(const QString &imageDataUrl);
+
+    void createThresholdSlider();
+    void applyBinarization(int threshold);
+
+    void createGammaSlider();
+    void applyGammaTransform(float gamma);
+
+    void createEdgeDetectionSlider();
+    void applyEdgeDetection(int threshold);
+
+    void saveImage();
+
+    void showAboutDialog();
 private:
     Ui::MainWindow *ui;
     bool toolbarWasVisible;
-    QDockWidget *toolDockWidget;
-    QWidget *toolWidget;
-    QList<QPushButton*> toolButtons;
+    ToolBar *toolbar; // 使用新的工具栏类
     QAction *toggleToolbarAction;
     QPixmap currentPixmap;  // 当前显示的图片
     
-    // 使用QLabel替代WebView和GraphicsView
-    QLabel *imageLabel;
+    // 使用WebView替代QLabel
+    QWebEngineView *webView;
 
-    void recreateToolbarLayout(bool isHorizontal);
-    void adjustToolbarLayout(Qt::DockWidgetArea area);
-    void initImageList();
-    void displayImageInLabel(const QPixmap &pixmap); // 在Label中显示图片
+    QAction *toggleImageListAction;
+    bool imageListWasVisible;
+    ImageList *imageList;
+
+    QSlider *thresholdSlider;       // 阈值滑块
+    QLabel *thresholdLabel;         // 显示当前阈值的标签
+    QWidget *sliderContainer;       // 包含滑块和标签的容器
+    int currentThreshold = 128;     // 当前阈值
+    bool sliderVisible = false; // 阈值滑块是否可见
+
+    QDockWidget *gammaDock = nullptr;
+    QSlider *gammaSlider = nullptr;
+    QLabel *gammaLabel = nullptr;
+    bool gammaVisible = false;
+
+    QDockWidget *edgeDock = nullptr;
+    QSlider *edgeSlider = nullptr;
+    QLabel *edgeLabel = nullptr;
+    bool edgeVisible = false;
 };
 #endif // MAINWINDOW_H

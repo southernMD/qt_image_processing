@@ -7,135 +7,76 @@
 #include <QListWidgetItem>
 #include <QDir>
 #include <QIcon>
-#include <QPainter>
-#include <QFont>
+#include <QBuffer>
+#include <QByteArray>
+#include <QtWebEngineWidgets>
+#include "toolbar.h"
+#include <QFile>
+#include <QTextStream>
+#include "imagelist.h"
+#include <QSlider>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QPushButton>
+#include <QMessageBox>
 #include <QSizePolicy>
-#include <QResizeEvent>
-#include <QWebEngineView>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , toolbarWasVisible(true) // 默认工具栏可见
+    , imageListWasVisible(true) // 默认图片列表可见
 {
     ui->setupUi(this);
     ui->actionOpen->setShortcut(QKeySequence("Ctrl+N"));
-
-    // 创建图像标签并设置属性
-    imageLabel = new QLabel(ui->canvasContainer);
-    imageLabel->setAlignment(Qt::AlignCenter);
-    imageLabel->setBackgroundRole(QPalette::Base);
-    imageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
-    imageLabel->setScaledContents(false);
-    imageLabel->setStyleSheet("background-color: white; border: 1px solid #d0d0d0;");
     
-    // 设置布局，使imageLabel填充整个canvasContainer
-    QVBoxLayout *layout = new QVBoxLayout(ui->canvasContainer);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(imageLabel);
-    ui->canvasContainer->setLayout(layout);
-
-    // 初始化图片列表
-    initImageList();
+    // 设置更大的初始窗口尺寸
+    resize(1200, 800);  // 根据需要调整尺寸
     
-    // 连接图片列表的点击信号
-    connect(ui->imageListWidget, &QListWidget::itemClicked, this, &MainWindow::onImageItemClicked);
-    
-    // 显示欢迎文字
-    QPixmap welcomePix(ui->canvasContainer->size());
-    welcomePix.fill(Qt::white);
-    QPainter painter(&welcomePix);
-    painter.setPen(QColor(102, 102, 102));
-    painter.setFont(QFont("Arial", 12));
-    painter.drawText(welcomePix.rect(), Qt::AlignCenter, tr("在左侧列表选择图片以在此查看"));
-    imageLabel->setPixmap(welcomePix);
-    
-    // 创建可停靠工具部件
-    toolDockWidget = new QDockWidget(tr("工具栏"), this);
-    toolDockWidget->setAllowedAreas(Qt::AllDockWidgetAreas);
-    toolDockWidget->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-    
-    // 设置工具栏风格和内边距，使其更加紧凑
-    toolDockWidget->setStyleSheet(
-        "QDockWidget {"
-        "    border: 2px solid #a0a0a0;"
-        "    border-radius: 4px;"
-        "}"
-        "QDockWidget::title {"
-        "    background: #f0f0f0;"
-        "    padding: 3px;"
-        "    border-bottom: 1px solid #a0a0a0;"
-        "}"
-    );
-    
-    // 创建新的工具栏容器
-    toolWidget = new QWidget(toolDockWidget);
-    
-    // 设置工具栏内容容器的样式
-    toolWidget->setStyleSheet(
-        "QWidget {"
-        "    background-color: #f8f8f8;"
-        "    border-radius: 2px;"
-        "    border: 1px solid #c0c0c0;"
-        "}"
-    );
-    
-    // 从原UI克隆所有按钮
-    QVBoxLayout *originalLayout = qobject_cast<QVBoxLayout*>(ui->layoutWidget->layout());
-    if (originalLayout) {
-        // 遍历原布局中的所有水平布局
-        for (int i = 0; i < originalLayout->count(); ++i) {
-            QHBoxLayout *hLayout = qobject_cast<QHBoxLayout*>(originalLayout->itemAt(i)->layout());
-            if (hLayout) {
-                // 复制水平布局中的所有按钮
-                for (int j = 0; j < hLayout->count(); ++j) {
-                    QWidget *widget = hLayout->itemAt(j)->widget();
-                    if (widget) {
-                        // 创建新按钮
-                        QPushButton *btn = qobject_cast<QPushButton*>(widget);
-                        if (btn) {
-                            QPushButton *newBtn = new QPushButton(toolWidget);
-                            // 保留原始样式中除尺寸外的设置，但修改尺寸相关的部分
-                            QString style = btn->styleSheet();
-                            style.replace("min-width: 30px;", "min-width: 100px;");
-                            style.replace("max-width: 30px;", "max-width: 100px;");
-                            style.replace("min-height: 30px;", "min-height: 60px;");
-                            style.replace("max-height: 30px;", "max-height: 60px;");
-                            newBtn->setStyleSheet(style);
-                            
-                            newBtn->setText(btn->text());
-                            newBtn->setToolTip(btn->toolTip());
-                            newBtn->setCursor(btn->cursor());
-                            
-                            // 立即设置按钮尺寸，确保初始状态就是大的
-                            newBtn->setMinimumSize(100, 60);
-                            newBtn->setMaximumSize(100, 60);
-                            
-                            // 连接新旧按钮的信号
-                            connect(newBtn, &QPushButton::clicked, [=]() {
-                                btn->click();
-                            });
-                            
-                            // 保存按钮引用以便后续调整布局
-                            toolButtons.append(newBtn);
-                        }
-                    }
-                }
-            }
-        }
+    // 1. 首先确保centralWidget有一个布局
+    QWidget *central = centralWidget();
+    if (!central->layout()) {
+        QVBoxLayout *layout = new QVBoxLayout(central);
+        layout->setContentsMargins(0, 0, 0, 0); // 移除边距
+        layout->setSpacing(0); // 移除间距
+        central->setLayout(layout);
     }
+
+    // 2. 初始化WebView并添加到中央部件的布局中
+    webView = ui->webView;
+    central->layout()->addWidget(webView);
+
+    // 3. 设置WebView的大小策略为在两个方向上都扩展
+    webView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    webView->setMinimumSize(QSize(0, 0));
+
+    // 4. 确保WebView可见
+    webView->setVisible(true);
+
+    qputenv("QTWEBENGINE_REMOTE_DEBUGGING", "5566");   
+
+    // 创建图片列表
+    imageList = new ImageList(this);
+    addDockWidget(Qt::BottomDockWidgetArea, imageList->getDockWidget());
     
-    // 初始化为垂直布局（因为默认左侧停靠）
-    recreateToolbarLayout(false);
+    // 设置图片列表的初始大小 - 使其更小
+    imageList->getDockWidget()->setMaximumHeight(150);  // 限制最大高度
     
-    // 设置工具栏的Widget
-    toolDockWidget->setWidget(toolWidget);
+    // 连接图片列表信号
+    connect(imageList, &ImageList::imageSelected, this, &MainWindow::onImageSelected);
+    connect(imageList, &ImageList::imageDeleted, this, &MainWindow::onImageDeleted);
     
-    // 将DockWidget添加到主窗口
-    addDockWidget(Qt::LeftDockWidgetArea, toolDockWidget);
+    // 初始化Canvas - 不使用定时器
+    initializeCanvas();
     
-    // 隐藏原来的工具栏
-    ui->layoutWidget->setVisible(false);
+    // 创建工具栏
+    toolbar = new ToolBar(this);
+    
+    // 连接工具栏按钮点击信号
+    connect(toolbar, &ToolBar::buttonClicked, this, &MainWindow::handleToolbarButtonClicked);
+    
+    // 将工具栏DockWidget添加到主窗口
+    addDockWidget(Qt::LeftDockWidgetArea, toolbar->getDockWidget());   
     
     // 创建视图菜单并添加工具栏显示/隐藏选项
     QMenu *viewMenu = menuBar()->addMenu(tr("视图(&V)"));
@@ -144,176 +85,69 @@ MainWindow::MainWindow(QWidget *parent)
     toggleToolbarAction->setChecked(true);
     viewMenu->addAction(toggleToolbarAction);
     
+    // 添加图片列表显示/隐藏选项
+    toggleImageListAction = new QAction(tr("图片列表"), this);
+    toggleImageListAction->setCheckable(true);
+    toggleImageListAction->setChecked(true);
+    viewMenu->addAction(toggleImageListAction);
+
+    QMenu *helpMenu = menuBar()->addMenu(tr("帮助(&H)"));
+    QAction *aboutAction = new QAction(tr("关于(&A)"), this);
+    helpMenu->addAction(aboutAction);
+    // 连接关于菜单项的点击信号
     // 连接菜单动作和工具栏可见性
-    connect(toggleToolbarAction, &QAction::toggled, toolDockWidget, &QDockWidget::setVisible);
+    connect(toggleToolbarAction, &QAction::toggled, toolbar, &ToolBar::setVisible);
+    connect(toggleImageListAction, &QAction::toggled, imageList, &ImageList::setVisible);
+    connect(aboutAction, &QAction::triggered, this, &MainWindow::showAboutDialog);
+    
     // 当工具栏可见性改变时更新菜单选项
-    connect(toolDockWidget, &QDockWidget::visibilityChanged, toggleToolbarAction, &QAction::setChecked);
+    connect(toolbar->getDockWidget(), &QDockWidget::visibilityChanged, toggleToolbarAction, &QAction::setChecked);
+    connect(imageList->getDockWidget(), &QDockWidget::visibilityChanged, toggleImageListAction, &QAction::setChecked);
     
     // 监听工具栏停靠位置变化
-    connect(toolDockWidget, &QDockWidget::dockLocationChanged, this, &MainWindow::adjustToolbarLayout);
+    connect(toolbar->getDockWidget(), &QDockWidget::dockLocationChanged, toolbar, &ToolBar::adjustLayout);
     
     connect(ui->actionOpen, &QAction::triggered, this, &MainWindow::onActionOpenTriggered);
-
-    // 添加浮动状态更改的处理
-    connect(toolDockWidget, &QDockWidget::topLevelChanged, this, [this](bool topLevel) {
-        // 浮动状态下使用水平布局
-        if (topLevel) {
-            recreateToolbarLayout(true);
-            // 浮动时增大工具栏尺寸以适应更宽的按钮
-            int estimatedWidth = 20 + (toolButtons.size() * (100 + 8)); // 边距 + (按钮数 * (按钮宽度 + 间距))
-            toolDockWidget->resize(qMax(estimatedWidth, 400), 120); // 宽度至少400，高度增加以适应更高的按钮
-            
-            // 设置浮动状态下的边框样式
-            toolDockWidget->setStyleSheet(
-                "QDockWidget {"
-                "    border: 2px solid #a0a0a0;"
-                "    border-radius: 4px;"
-                "    background-color: #f0f0f0;"
-                "}"
-                "QDockWidget::title {"
-                "    background: #e0e0e0;"
-                "    padding: 4px;"
-                "    border-bottom: 1px solid #a0a0a0;"
-                "}"
-            );
-        } else {
-            // 回到停靠状态，根据停靠区域决定布局
-            adjustToolbarLayout(this->dockWidgetArea(toolDockWidget));
-        }
-    });
     
-    // 立即应用当前布局，确保尺寸正确
-    QTimer::singleShot(0, this, [this]() {
-        adjustToolbarLayout(Qt::LeftDockWidgetArea);
-    });
+    // 立即应用布局，不使用定时器
+    toolbar->adjustLayout(Qt::LeftDockWidgetArea);
+    
+    // 隐藏原来的图片列表控件
+    if (ui->imageListWidget) {
+        ui->imageListWidget->setVisible(false);
+    }
+
+    
 }
 
 MainWindow::~MainWindow()
 {
     delete ui;
-}
-
-void MainWindow::recreateToolbarLayout(bool isHorizontal)
-{
-    // 删除旧布局
-    if (toolWidget->layout()) {
-        delete toolWidget->layout();
-    }
-    
-    // 创建新布局
-    QBoxLayout *layout = nullptr;
-    if (isHorizontal) {
-        // 水平布局
-        layout = new QHBoxLayout(toolWidget);
-        layout->setContentsMargins(10, 10, 10, 10); // 增加边距，适应大按钮
-        layout->setSpacing(10);                     // 增加间距
-        
-        // 设置工具栏在水平布局时的高度 - 增加以适应更高的按钮
-        toolWidget->setMaximumHeight(80);
-        
-        // 当水平布局时设置DockWidget的最大高度 - 增加以适应更高的按钮
-        toolDockWidget->setMaximumHeight(100);
-        
-        // 设置水平布局时的边框样式
-        toolDockWidget->setStyleSheet(
-            "QDockWidget {"
-            "    border: 2px solid #a0a0a0;"
-            "    border-radius: 4px;"
-            "}"
-            "QDockWidget::title {"
-            "    background: #f0f0f0;"
-            "    padding: 3px;"
-            "    border-bottom: 1px solid #a0a0a0;"
-            "}"
-        );
-        
-        // 调整按钮在水平布局时的尺寸 - 高度设为60
-        for (QPushButton *btn : toolButtons) {
-            btn->setMinimumSize(100, 60);
-            btn->setMaximumSize(100, 60);
-        }
-    } else {
-        // 垂直布局
-        layout = new QVBoxLayout(toolWidget);
-        layout->setContentsMargins(6, 6, 6, 6); // 正常边距
-        layout->setSpacing(8);                  // 增加间距以适应更高的按钮
-        
-        // 垂直布局时移除最大高度限制
-        toolWidget->setMaximumHeight(QWIDGETSIZE_MAX);
-        toolDockWidget->setMaximumHeight(QWIDGETSIZE_MAX);
-        
-        // 设置垂直布局时的边框样式
-        toolDockWidget->setStyleSheet(
-            "QDockWidget {"
-            "    border: 2px solid #a0a0a0;"
-            "    border-radius: 4px;"
-            "}"
-            "QDockWidget::title {"
-            "    background: #f0f0f0;"
-            "    padding: 3px;"
-            "    border-bottom: 1px solid #a0a0a0;"
-            "}"
-        );
-        
-        // 垂直布局时也设置按钮尺寸 - 高度设为60
-        for (QPushButton *btn : toolButtons) {
-            btn->setMinimumSize(100, 60);
-            btn->setMaximumSize(100, 60);
-        }
-    }
-    
-    // 添加按钮到布局
-    for (QPushButton *btn : toolButtons) {
-        layout->addWidget(btn);
-    }
-    
-    layout->addStretch(); // 添加弹性空间，使按钮靠边显示
-    toolWidget->setLayout(layout);
-}
-
-void MainWindow::adjustToolbarLayout(Qt::DockWidgetArea area)
-{
-    // 根据停靠区域调整布局
-    bool isHorizontal = (area == Qt::TopDockWidgetArea || area == Qt::BottomDockWidgetArea);
-    
-    // 重新创建适当的布局
-    recreateToolbarLayout(isHorizontal);
-    
-    // 确保在水平停靠时立即应用高度限制
-    if (isHorizontal) {
-        QTimer::singleShot(0, this, [this]() {
-            toolDockWidget->setMaximumHeight(100); // 与recreateToolbarLayout中的值一致
-            toolWidget->updateGeometry();
-            toolDockWidget->adjustSize();
-        });
-    }
+    // toolbar 会作为子对象自动删除
 }
 
 void MainWindow::showEvent(QShowEvent *event)
 {
     QMainWindow::showEvent(event);
     
-    // 如果工具栏应该可见，确保它显示出来
-    if (toolbarWasVisible) {
-        toolDockWidget->show();
-        toggleToolbarAction->setChecked(true);
-    } else {
-        toolDockWidget->hide();
-        toggleToolbarAction->setChecked(false);
-    }
+    // 安装事件过滤器
+    webView->installEventFilter(this);
     
-    // 初始更新图像
-    QTimer::singleShot(500, this, [this]() {
-        if (!currentPixmap.isNull()) {
-            displayImageInLabel(currentPixmap);
-        }
-    });
+    // 设置工具栏可见性
+    toolbar->setVisible(toolbarWasVisible);
+    toggleToolbarAction->setChecked(toolbarWasVisible);
+    
+    // 设置图片列表可见性
+    imageList->setVisible(imageListWasVisible);
+    toggleImageListAction->setChecked(imageListWasVisible);
 }
 
 void MainWindow::hideEvent(QHideEvent *event)
 {
     // 保存工具栏的可见性状态
-    toolbarWasVisible = toolDockWidget->isVisible();
+    toolbarWasVisible = toolbar->isVisible();
+    // 保存图片列表的可见性状态
+    imageListWasVisible = imageList->isVisible();
     QMainWindow::hideEvent(event);
 }
 
@@ -325,7 +159,7 @@ void MainWindow::changeEvent(QEvent *event)
         if (!(windowState() & Qt::WindowMinimized) && toolbarWasVisible) {
             // 确保工具栏显示
             QTimer::singleShot(100, [this]() {
-                toolDockWidget->setVisible(true);
+                toolbar->setVisible(true);
                 toggleToolbarAction->setChecked(true);
             });
         }
@@ -333,126 +167,54 @@ void MainWindow::changeEvent(QEvent *event)
     QMainWindow::changeEvent(event);
 }
 
-void MainWindow::initImageList()
+void MainWindow::initializeCanvas()
 {
-    // 清空列表
-    ui->imageListWidget->clear();
-    
-    // 设置图标模式和显示大小
-    ui->imageListWidget->setViewMode(QListWidget::IconMode);
-    ui->imageListWidget->setIconSize(QSize(80, 80));
-    ui->imageListWidget->setGridSize(QSize(100, 100));
-    ui->imageListWidget->setResizeMode(QListWidget::Adjust);
-    ui->imageListWidget->setMovement(QListWidget::Static);
-    ui->imageListWidget->setSpacing(5);
-    ui->imageListWidget->setContextMenuPolicy(Qt::CustomContextMenu);
-    
-    // 连接右键菜单信号
-    connect(ui->imageListWidget, &QListWidget::customContextMenuRequested, 
-            this, &MainWindow::showImageListContextMenu);
-    
-    // 添加几个示例图片项
-    QStringList defaultImages;
-    defaultImages << ":/images/left.svg" << ":/images/right.svg" << ":/images/reload.svg";
-    
-    for(int i = 0; i < defaultImages.size(); ++i) {
-        QListWidgetItem *item = new QListWidgetItem(ui->imageListWidget);
-        item->setIcon(QIcon(defaultImages[i]));
-        item->setText(tr("图片%1").arg(i+1));
-        item->setTextAlignment(Qt::AlignCenter);
-        item->setData(Qt::UserRole, defaultImages[i]);
-        ui->imageListWidget->addItem(item);
+    // 从资源文件加载HTML
+    QFile htmlFile(":/html/canvas_viewer.html");
+    if (!htmlFile.open(QIODevice::ReadOnly)) {
+        qDebug() << "无法打开HTML资源文件";
+        return;
     }
+    
+    // 读取HTML内容
+    QTextStream stream(&htmlFile);
+    QString htmlContent = stream.readAll();
+    htmlFile.close();
+    
+    // 将HTML内容加载到WebView
+    webView->setHtml(htmlContent);
 }
 
-void MainWindow::showImageListContextMenu(const QPoint &pos)
-{
-    QPoint globalPos = ui->imageListWidget->mapToGlobal(pos);
-    QMenu contextMenu;
-    
-    QAction *addAction = contextMenu.addAction(tr("添加图片"));
-    QAction *removeAction = contextMenu.addAction(tr("删除选中图片"));
-    QAction *clearAction = contextMenu.addAction(tr("清空列表"));
-    
-    // 如果没有选中项，禁用删除操作
-    if(ui->imageListWidget->selectedItems().isEmpty()) {
-        removeAction->setEnabled(false);
-    }
-    
-    // 如果列表为空，禁用清空操作
-    if(ui->imageListWidget->count() == 0) {
-        clearAction->setEnabled(false);
-    }
-    
-    // 显示菜单并获取用户选择的操作
-    QAction *selectedAction = contextMenu.exec(globalPos);
-    
-    if(selectedAction == addAction) {
-        onActionOpenTriggered();
-    }
-    else if(selectedAction == removeAction) {
-        // 删除选中的图片项
-        QList<QListWidgetItem*> items = ui->imageListWidget->selectedItems();
-        for(QListWidgetItem *item : items) {
-            delete ui->imageListWidget->takeItem(ui->imageListWidget->row(item));
-        }
-    }
-    else if(selectedAction == clearAction) {
-        // 清空列表
-        ui->imageListWidget->clear();
-    }
-}
-
-void MainWindow::displayImageInLabel(const QPixmap &pixmap)
+void MainWindow::displayImageInCanvas(const QPixmap &pixmap)
 {
     if(pixmap.isNull()) return;
     
-    // 获取QLabel的大小
-    QSize labelSize = imageLabel->size();
+    QByteArray byteArray;
+    QBuffer buffer(&byteArray);
+    buffer.open(QIODevice::WriteOnly);
+    pixmap.save(&buffer, "PNG");
+    buffer.close();
     
-    // 如果标签尺寸有效，则计算缩放后的图片
-    if(labelSize.width() > 0 && labelSize.height() > 0) {
-        // 等比例缩放图片以适应标签大小
-        QPixmap scaledPixmap = pixmap.scaled(
-            labelSize, 
-            Qt::KeepAspectRatio, 
-            Qt::SmoothTransformation
-        );
-        
-        // 设置图片到标签
-        imageLabel->setPixmap(scaledPixmap);
-    } else {
-        // 直接设置原始图片
-        imageLabel->setPixmap(pixmap);
-    }
+    QString imageData = "data:image/png;base64," + QString::fromLatin1(byteArray.toBase64().data());
+    
+    QString script = QString("displayImage('%1')").arg(imageData);
+    webView->page()->runJavaScript(script);
 }
 
-void MainWindow::onImageItemClicked(QListWidgetItem *item)
+void MainWindow::onImageSelected(const QPixmap &pixmap, const QString &path)
 {
-    // 获取选中的图片路径
-    QString imagePath = item->data(Qt::UserRole).toString();
-    qDebug() << "选中图片: " << imagePath;
-    
-    // 在Label中显示选中的图片
-    if(!imagePath.isEmpty()) {
-        QPixmap pixmap(imagePath);
-        if(!pixmap.isNull()) {
-            currentPixmap = pixmap; // 保存当前图片
-            displayImageInLabel(pixmap); // 在Label中显示图片
-        } else {
-            // 显示错误信息
-            QPixmap errorPix(imageLabel->size());
-            errorPix.fill(Qt::white);
-            QPainter painter(&errorPix);
-            painter.setPen(Qt::red);
-            painter.setFont(QFont("Arial", 12));
-            painter.drawText(errorPix.rect(), Qt::AlignCenter, tr("无法加载图片"));
-            imageLabel->setPixmap(errorPix);
-        }
-    }
+    currentPixmap = pixmap;
+    displayImageInCanvas(pixmap);
 }
 
-void MainWindow::onActionOpenTriggered() {
+void MainWindow::onImageDeleted(const QString &path)
+{
+    currentPixmap = QPixmap();
+    webView->page()->runJavaScript("drawWelcomeText();");
+}
+
+void MainWindow::onActionOpenTriggered()
+{
     // 打开文件对话框选择图片
     QStringList files = QFileDialog::getOpenFileNames(
         this,
@@ -463,24 +225,8 @@ void MainWindow::onActionOpenTriggered() {
     
     if(files.isEmpty()) return;
     
-    // 清空现有列表
-    ui->imageListWidget->clear();
-    
-    // 添加选择的图片到列表
-    for(int i = 0; i < files.size(); ++i) {
-        QListWidgetItem *item = new QListWidgetItem(ui->imageListWidget);
-        item->setIcon(QIcon(files[i]));
-        item->setText(QFileInfo(files[i]).fileName());
-        item->setTextAlignment(Qt::AlignCenter);
-        item->setData(Qt::UserRole, files[i]);
-        ui->imageListWidget->addItem(item);
-    }
-    
-    // 如果有图片，选中第一张
-    if(ui->imageListWidget->count() > 0) {
-        ui->imageListWidget->setCurrentRow(0);
-        onImageItemClicked(ui->imageListWidget->item(0));
-    }
+    // 使用 ImageList 类添加图片
+    imageList->addImages(files);
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
@@ -493,8 +239,418 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     
-    // 窗口大小改变时重新调整图像大小
-    if (!currentPixmap.isNull()) {
-        displayImageInLabel(currentPixmap);
+    // 使用静态变量作为防抖机制，避免频繁更新
+    static QTimer resizeTimer;
+    resizeTimer.setSingleShot(true);
+    
+    // 取消之前的定时器，只处理最后一次 resize 事件
+    resizeTimer.disconnect();
+    connect(&resizeTimer, &QTimer::timeout, this, [this]() {
+        // 只在有图片时更新
+        if (!currentPixmap.isNull()) {
+            displayImageInCanvas(currentPixmap);
+        }
+    });
+    
+    // 设置较长的延时，减少触发频率
+    resizeTimer.start(300);
+}
+
+// 修改工具栏按钮点击处理方法
+
+// 成员变量添加
+QDockWidget *thresholdDock = nullptr; // 存储二值化DockWidget指针
+void MainWindow::handleToolbarButtonClicked(int index){
+    qDebug() << "按钮点击" << index;
+    
+    // 关闭其他设置窗口
+    if (index != 1 && thresholdDock && thresholdDock->isVisible()) {
+        thresholdDock->close();
     }
+    if (index != 3 && gammaDock && gammaDock->isVisible()) {
+        gammaDock->close();
+    }
+    if (index != 4 && edgeDock && edgeDock->isVisible()) {
+        edgeDock->close();
+    }
+    
+    switch (index) {
+        case 0:
+            webView->page()->runJavaScript("grayscale()", [this](const QVariant &result) {
+                if (result.isValid() && !result.isNull()) {
+                    // 获取返回的base64数据
+                    QString imageDataUrl = result.toString();
+                    if (!imageDataUrl.isEmpty()) {
+                        // 可以选择保存或更新图片
+                        updateImageWithBase64(imageDataUrl);
+                    }
+                }
+            });
+            break;
+        case 1:
+            if (currentPixmap.isNull()) return;
+            createThresholdSlider();
+            break;
+        case 2:
+            webView->page()->runJavaScript("meanFilter()", [this](const QVariant &result) {
+                if (result.isValid() && !result.isNull()) {
+                    QString imageDataUrl = result.toString();
+                    if (!imageDataUrl.isEmpty()) {
+                        updateImageWithBase64(imageDataUrl);
+                    }
+                }
+            });
+            break;
+        case 3:
+            if (currentPixmap.isNull()) return;
+            createGammaSlider();
+            break;
+        case 4:
+            if (currentPixmap.isNull()) return;
+            createEdgeDetectionSlider();
+            break;
+        case 5:
+            webView->page()->runJavaScript("resetImage()");
+            break;
+        case 6:
+            saveImage();
+            break;
+        case 7:
+            if (currentPixmap.isNull()) return;
+            webView->page()->runJavaScript("startMosaicMode()", [this](const QVariant &result) {
+                if (result.toBool()) {
+                    qDebug() << "已进入马赛克模式";
+                    
+                    webView->page()->runJavaScript(
+                        "window.onMosaicApplied = function(result) { return result; };",
+                        [this](const QVariant &) {
+                            qDebug() << "马赛克回调设置完成";
+                        }
+                    );
+                }
+            });
+            break;
+        default:
+            break;
+    }
+}
+
+// 添加一个处理Base64数据的方法
+void MainWindow::updateImageWithBase64(const QString &imageDataUrl){
+    // 移除前缀 "data:image/png;base64,"
+    QString base64Data = imageDataUrl.mid(22);
+    
+    // 转换为QPixmap
+    QByteArray imageData = QByteArray::fromBase64(base64Data.toLatin1());
+    QPixmap processedPixmap;
+    processedPixmap.loadFromData(imageData, "PNG");
+    
+    if (processedPixmap.isNull()) {
+        qDebug() << "处理后的图像无效";
+        return;
+    }
+    
+    // 更新当前图像
+    currentPixmap = processedPixmap;
+}
+
+
+// 创建二值化阈值滑块
+void MainWindow::createThresholdSlider() {
+    // 如果已存在二值化设置窗口且可见，则不再创建新窗口
+    if (thresholdDock && thresholdDock->isVisible()) {
+        applyBinarization(128);
+        thresholdDock->setFocus(); // 设置焦点到已有窗口
+        return;
+    }
+    
+    // 如果窗口存在但不可见，则显示它
+    if (thresholdDock) {
+        applyBinarization(128);
+        thresholdDock->show();
+        return;
+    }
+    
+    // 创建新的二值化设置窗口
+    thresholdDock = new QDockWidget(tr("二值化设置"), this);
+    thresholdDock->setAllowedAreas(Qt::RightDockWidgetArea);
+    thresholdDock->setFeatures(QDockWidget::DockWidgetClosable);
+    // 创建内容控件
+    QWidget *content = new QWidget(thresholdDock);
+    QVBoxLayout *layout = new QVBoxLayout(content);
+    
+    // 创建滑块
+    QSlider *slider = new QSlider(Qt::Horizontal, content);
+    slider->setRange(0, 255);
+    slider->setValue(128);
+    slider->setTickPosition(QSlider::TicksBelow);
+    slider->setTickInterval(32);
+    
+    // 创建标签
+    QLabel *label = new QLabel("128", content);
+    label->setAlignment(Qt::AlignCenter);
+    
+    // 添加到布局
+    layout->addWidget(new QLabel(tr("调整阈值:"), content));
+    layout->addWidget(slider);
+    layout->addWidget(label);
+    layout->addStretch();
+    
+    // 设置内容控件
+    content->setLayout(layout);
+    thresholdDock->setWidget(content);
+    thresholdDock->setMinimumWidth(200);
+    // 添加到主窗口
+    addDockWidget(Qt::RightDockWidgetArea, thresholdDock);
+    
+    // 连接信号
+    connect(slider, &QSlider::valueChanged, [label, this](int value) {
+        label->setText(QString::number(value));
+        applyBinarization(value);
+    });
+    
+    // 保存引用
+    thresholdSlider = slider;
+    thresholdLabel = label;
+    sliderContainer = content;
+    
+    // 应用初始阈值
+    applyBinarization(128);
+}
+
+void MainWindow::applyBinarization(int threshold)
+{
+    if (!currentPixmap.isNull()) {
+        // 调用JavaScript的二值化函数
+        QString script = QString("binarizeImage(%1)").arg(threshold);
+        webView->page()->runJavaScript(script, [this](const QVariant &result) {
+            if (result.isValid() && !result.toString().isEmpty()) {
+                // 更新图像
+                updateImageWithBase64(result.toString());
+            }
+        });
+    }
+}
+
+
+// 创建伽马调整滑块
+void MainWindow::createGammaSlider() {
+    // 如果已存在伽马设置窗口且可见，则不再创建新窗口
+    if (gammaDock && gammaDock->isVisible()) {
+        applyGammaTransform(1.0);  // 默认值1.0
+        gammaDock->setFocus();     // 设置焦点到已有窗口
+        return;
+    }
+    
+    // 如果窗口存在但不可见，则显示它
+    if (gammaDock) {
+        applyGammaTransform(1.0);
+        gammaDock->show();
+        return;
+    }
+    
+    // 创建新的伽马设置窗口
+    gammaDock = new QDockWidget(tr("伽马调整"), this);
+    gammaDock->setAllowedAreas(Qt::RightDockWidgetArea);
+    gammaDock->setFeatures(QDockWidget::DockWidgetClosable);
+    
+    // 创建内容控件
+    QWidget *content = new QWidget(gammaDock);
+    QVBoxLayout *layout = new QVBoxLayout(content);
+    
+    // 创建标题标签
+    QLabel *titleLabel = new QLabel(tr("伽马值调整:"), content);
+    titleLabel->setAlignment(Qt::AlignCenter);
+    titleLabel->setStyleSheet("font-weight: bold;");
+    
+    // 创建滑块 - 伽马值范围从0.1到3.0，使用100倍表示
+    gammaSlider = new QSlider(Qt::Horizontal, content);
+    gammaSlider->setRange(10, 300);  // 伽马值0.1到3.0，乘以100
+    gammaSlider->setValue(100);      // 默认1.0
+    gammaSlider->setTickPosition(QSlider::TicksBelow);
+    gammaSlider->setTickInterval(10); // 改为10，即0.1的步长
+    
+    // 创建显示当前伽马值的标签
+    gammaLabel = new QLabel("1.00", content);
+    gammaLabel->setAlignment(Qt::AlignCenter);
+    
+    // 添加一个水平布局用于显示最小值和最大值
+    QHBoxLayout *rangeLayout = new QHBoxLayout();
+    QLabel *minLabel = new QLabel("0.10", content);
+    QLabel *maxLabel = new QLabel("3.00", content);
+    rangeLayout->addWidget(minLabel);
+    rangeLayout->addStretch();
+    rangeLayout->addWidget(maxLabel);
+    
+    // 添加到布局
+    layout->addWidget(titleLabel);
+    layout->addWidget(gammaSlider);
+    layout->addWidget(gammaLabel);
+    layout->addLayout(rangeLayout);
+    
+    // 添加说明文字
+    QLabel *infoLabel = new QLabel(tr("<1.0: 增亮图像\n=1.0: 保持不变\n>1.0: 加深图像"), content);
+    infoLabel->setAlignment(Qt::AlignCenter);
+    infoLabel->setStyleSheet("color: #666; font-size: 12px;");
+    layout->addWidget(infoLabel);
+    
+    layout->addStretch();
+    
+    // 设置内容控件
+    content->setLayout(layout);
+    gammaDock->setWidget(content);
+    gammaDock->setMinimumWidth(200);
+    
+    // 添加到主窗口
+    addDockWidget(Qt::RightDockWidgetArea, gammaDock);
+    
+    // 连接信号
+    connect(gammaSlider, &QSlider::valueChanged, [this](int value) {
+        float gamma = value / 100.0f;
+        gammaLabel->setText(QString::number(gamma, 'f', 2));
+        applyGammaTransform(gamma);
+    });
+    
+    // 连接关闭信号
+    connect(gammaDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        gammaVisible = visible;
+    });
+    
+    // 应用初始伽马值
+    applyGammaTransform(1.0);
+}
+
+// 应用伽马变换
+void MainWindow::applyGammaTransform(float gamma) {
+    if (!currentPixmap.isNull()) {
+        // 调用JavaScript的伽马变换函数
+        QString script = QString("gammaTransform(%1)").arg(gamma);
+        webView->page()->runJavaScript(script, [this](const QVariant &result) {
+            if (result.isValid() && !result.toString().isEmpty()) {
+                // 更新图像
+                updateImageWithBase64(result.toString());
+            }
+        });
+    }
+}
+
+// 创建边缘检测滑块
+void MainWindow::createEdgeDetectionSlider() {
+    // 如果已存在边缘检测设置窗口且可见，则不再创建新窗口
+    if (edgeDock && edgeDock->isVisible()) {
+        applyEdgeDetection(30);  // 默认值30
+        edgeDock->setFocus();    // 设置焦点到已有窗口
+        return;
+    }
+    
+    // 如果窗口存在但不可见，则显示它
+    if (edgeDock) {
+        applyEdgeDetection(30);
+        edgeDock->show();
+        return;
+    }
+    
+    // 创建新的边缘检测设置窗口
+    edgeDock = new QDockWidget(tr("边缘检测"), this);
+    edgeDock->setAllowedAreas(Qt::RightDockWidgetArea);
+    edgeDock->setFeatures(QDockWidget::DockWidgetClosable);
+    
+    // 创建内容控件
+    QWidget *content = new QWidget(edgeDock);
+    QVBoxLayout *layout = new QVBoxLayout(content);
+    
+    // 创建标题标签
+    QLabel *titleLabel = new QLabel(tr("阈值调整:"), content);
+    titleLabel->setAlignment(Qt::AlignCenter);
+    titleLabel->setStyleSheet("font-weight: bold;");
+    
+    // 创建滑块 - 边缘检测阈值范围从0到100
+    edgeSlider = new QSlider(Qt::Horizontal, content);
+    edgeSlider->setRange(0, 100);  // 阈值范围0-100
+    edgeSlider->setValue(30);      // 默认值30
+    edgeSlider->setTickPosition(QSlider::TicksBelow);
+    edgeSlider->setTickInterval(5); // 每5个单位一个刻度
+    
+    // 创建显示当前阈值的标签
+    edgeLabel = new QLabel("30", content);
+    edgeLabel->setAlignment(Qt::AlignCenter);
+    
+    // 添加一个水平布局用于显示最小值和最大值
+    QHBoxLayout *rangeLayout = new QHBoxLayout();
+    QLabel *minLabel = new QLabel("0", content);
+    QLabel *maxLabel = new QLabel("100", content);
+    rangeLayout->addWidget(minLabel);
+    rangeLayout->addStretch();
+    rangeLayout->addWidget(maxLabel);
+    
+    // 添加到布局
+    layout->addWidget(titleLabel);
+    layout->addWidget(edgeSlider);
+    layout->addWidget(edgeLabel);
+    layout->addLayout(rangeLayout);
+    
+    // 添加说明文字
+    QLabel *infoLabel = new QLabel(tr("较低的值: 检测更多边缘\n较高的值: 仅检测明显边缘"), content);
+    infoLabel->setAlignment(Qt::AlignCenter);
+    infoLabel->setStyleSheet("color: #666; font-size: 12px;");
+    layout->addWidget(infoLabel);
+    
+    layout->addStretch();
+    
+    // 设置内容控件
+    content->setLayout(layout);
+    edgeDock->setWidget(content);
+    edgeDock->setMinimumWidth(200);
+    
+    // 添加到主窗口
+    addDockWidget(Qt::RightDockWidgetArea, edgeDock);
+    
+    // 连接信号
+    connect(edgeSlider, &QSlider::valueChanged, [this](int value) {
+        edgeLabel->setText(QString::number(value));
+        applyEdgeDetection(value);
+    });
+    
+    // 连接关闭信号
+    connect(edgeDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        edgeVisible = visible;
+    });
+    
+    // 应用初始阈值
+    applyEdgeDetection(30);
+}
+
+// 应用边缘检测
+void MainWindow::applyEdgeDetection(int threshold) {
+    if (!currentPixmap.isNull()) {
+        // 调用JavaScript的边缘检测函数
+        QString script = QString("edgeDetection(%1)").arg(threshold);
+        webView->page()->runJavaScript(script, [this](const QVariant &result) {
+            if (result.isValid() && !result.toString().isEmpty()) {
+                // 更新图像
+                updateImageWithBase64(result.toString());
+            }
+        });
+    }
+}
+
+void MainWindow::saveImage() {
+    if (!currentPixmap.isNull()) {
+        // 使用QFileDialog保存图片
+        QString fileName = QFileDialog::getSaveFileName(
+            this,  tr("Save Image"), "", tr("Images (*.png *.jpg *.bmp)"));
+        if (!fileName.isEmpty()) {
+            // 保存图片
+            currentPixmap.save(fileName);
+        }
+    }
+}
+
+void MainWindow::showAboutDialog()
+{
+    QMessageBox::about(this, tr("关于"),
+        tr("<h3>大智慧图像处理</h3>"
+           "<p>版本 1.0</p>"
+           "<p>一个功能齐全的图像处理工具</p>"
+           "<p>© 2023 开发者姓名</p>"));
 }
